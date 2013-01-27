@@ -1,5 +1,5 @@
 import socket
-import thread
+from thread import *
 
 class Proxy:
 
@@ -20,82 +20,83 @@ class Proxy:
 		self.banned_html = open("resources/banned.html").read()
 
 		self.admin_html= open("resources/admin.html").read()
+
+		self.dns_error_html = open("resources/dns.html").read()
 	
 		print "Starting up. Good luck."
 
 		self.loop_forever()
 
 	def loop_forever(self):
-		self.socket = socket.socket()
+		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	
 		self.socket.bind((self.hostname, self.port))
 
-		# TODO(scottbpc): Re-do socket listening etc
+		self.socket.listen(100)
 
 		while True:
-			self.socket.listen(1)
-
-			# TODO(scottbpc): Thread this well
 			conn, addr = self.socket.accept()
 	                
-			tmp = []
-        	        
-			data = conn.recv(8192)
-			
-			self.handle(conn, data)
+			print "DISPATCHING THREAD - ", addr[0], addr[1]	
+			#threading.Thread(target = self.handle, args=(conn, addr)).start()
+			start_new_thread(self.handle, (conn,))
 
-	def handle(self, conn, data):
+	def handle(self, conn):
+
+		data = conn.recv(4096)	
 
 		(method, headers, payload, hostname) = self.parse_http(data)
 
 		#if hostname in self.banned_hosts:
 		if False:
-			print "Sending crap!"
-			# TODO(scottbpc): Reply with HTML file
 			conn.send(self.banned_html + "\r\n")
 			conn.close()
 			return	
 	
 		# TODO(scottbpc): Check payload for banned phrases
 
-		print "Parsing"
-
 		(host, port) = self.parse_host(hostname)
 
 		# TODO(scottbpc): Add cache lookup
 	
 		if host == self.hostname and port == self.port:
-			print "Hooray!"
 			conn.send(self.admin_html + "\r\n")
 			conn.close()
 			return()
 
-		print "Going to", host, port
-	
-		outgoing = socket.socket()
-		outgoing.connect((host, port))
-	
-		print "Sending on deh data"	
+		# lag is somewhere before here
+
+		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		outgoing.settimeout(10)
+
+		try:
+			outgoing.connect((host, port))
+		except:
+			# DNS error :(
+			print "DNS error - could not resolve host", host
+			outgoing.close()
+			conn.send(self.dns_error_html)	
+			conn.close
+			return
+
 		outgoing.send(data + "\r\n")
 
-		print "Gettin da shi"
 		response = []
     		while True:
-        		data = outgoing.recv(8192)
-        		if not data: break
-        		print "mo shi"
+	 		try:
+				data = outgoing.recv(4096)
+        		except:
+				print "Socket timeout :("
+			if not data: break
 			response.append(data)
-    		response = ''.join(response)
-		
-		print response
-
+	
+		response = ''.join(response)
+	
 		conn.send(response + "\r\n")
+		conn.close()
 
 	def parse_http(self, data):
 		lines = data.split("\r\n")
-	
-		print data
-	
 		method = lines[0]
 
 		header = True
@@ -103,23 +104,25 @@ class Proxy:
 		payload = ""
 		hostname = ""
 
+		tmp = []
+
 		for line in lines:
 			if header:
 				headers.append(line)
 				if line.split(":")[0] == "Host":
-					print "Host line is", line
 					hostname = line.split("Host: ")[1]
 			elif line == "\r\n":
 				header = False
 
 			else:
-				payload.join(line)
+				tmp.append(line)
+
+		payload = ''.join(tmp)
 
 		return (method, headers, payload, hostname)
 
 	def parse_host(self, host):
 		tmp = host.split(":")
-		print tmp
 		
 		if len(tmp) > 2:
 			# Then of form localhost:111:222
@@ -135,5 +138,5 @@ class Proxy:
 
 
 if __name__ == "__main__":
-	p = Proxy(port=8000)
+	p = Proxy(port=8080)
 	
