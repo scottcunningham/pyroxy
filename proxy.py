@@ -37,8 +37,7 @@ class Proxy:
 		while True:
 			conn, addr = self.socket.accept()
 	                
-			print "DISPATCHING THREAD - ", addr[0], addr[1]	
-			#threading.Thread(target = self.handle, args=(conn, addr)).start()
+			print "Connection from", addr[0] + ":" +  str(addr[1])	
 			start_new_thread(self.handle, (conn,))
 
 	def handle(self, conn):
@@ -72,11 +71,11 @@ class Proxy:
 		try:
 			outgoing.connect((host, port))
 		except:
-			# DNS error :(
 			print "DNS error - could not resolve host", host
-			outgoing.close()
-			conn.send(self.dns_error_html)	
+			print "Full hostname was", hostname
+			conn.send(self.dns_error_html + "\r\n")	
 			conn.close
+			outgoing.close()
 			return
 
 		outgoing.send(data + "\r\n")
@@ -85,14 +84,13 @@ class Proxy:
     		while True:
 	 		try:
 				data = outgoing.recv(4096)
-        		except:
-				print "Socket timeout :("
-			if not data: break
-			response.append(data)
-	
-		response = ''.join(response)
-	
-		conn.send(response + "\r\n")
+				conn.send(data)
+			except:
+				pass		
+			if not data: 
+				break
+
+		conn.send("\r\n")	
 		conn.close()
 
 	def parse_http(self, data):
