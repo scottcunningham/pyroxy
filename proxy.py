@@ -32,11 +32,11 @@ class Proxy:
 	
 		self.socket.bind((self.hostname, self.port))
 
-		self.socket.listen(100)
+		self.socket.listen(10000)
 
 		while True:
 			conn, addr = self.socket.accept()
-	                
+					
 			print "Connection from", addr[0] + ":" +  str(addr[1])	
 			start_new_thread(self.handle, (conn,))
 
@@ -44,10 +44,11 @@ class Proxy:
 
 		data = conn.recv(4096)	
 
+		#TODO(scottbpc): Check for HTTPS traffic and reject it
+
 		(method, headers, payload, hostname) = self.parse_http(data)
 
-		#if hostname in self.banned_hosts:
-		if False:
+		if hostname in self.banned_hosts:
 			conn.send(self.banned_html + "\r\n")
 			conn.close()
 			return	
@@ -56,14 +57,13 @@ class Proxy:
 
 		(host, port) = self.parse_host(hostname)
 
-		# TODO(scottbpc): Add cache lookup
-	
-		if host == self.hostname and port == self.port:
-			conn.send(self.admin_html + "\r\n")
-			conn.close()
-			return()
+		if host is None:
+			print "Host Error: error parsing", hostname
 
-		# lag is somewhere before here
+		# TODO(scottbpc): Add cache lookup
+		if host == self.hostname and port == self.port:
+			self.handle_admin(method, conn)
+			return
 
 		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		outgoing.settimeout(10)
@@ -80,8 +80,9 @@ class Proxy:
 
 		outgoing.send(data + "\r\n")
 
-		response = []
-    		while True:
+		data = ""
+
+		while True:
 	 		try:
 				data = outgoing.recv(4096)
 				conn.send(data)
@@ -89,7 +90,7 @@ class Proxy:
 				pass		
 			if not data: 
 				break
-
+		
 		conn.send("\r\n")	
 		conn.close()
 
@@ -134,7 +135,84 @@ class Proxy:
 
 		return (tmp[0], port)
 
+	def handle_admin(self, method, conn):
+		html = '''<html>
+				<head><title>Admin Page</title>
+				<body><h1>Admin Panel</h1>
+					<h2>Add Bans</h2>
+					<form name="input" action="add_host" method="get">
+						Host: <input type="text" name="host"><input type="submit" value="Submit">
+					</form>
+					<form name="input" action="add_keyword" method="get">
+						Keyword: <input type="text" name="keyword">
+					<input type="submit" value="Submit">
+					</form>
+					<h2>Remove Bans</h2>
+					<form name="input" action="del_host" method="get">
+						Host: <input type="text" name="host"><input type="submit" value="Submit">
+					</form>
+					<form name="input" action="del_keyword" method="get">
+						Keyword: <input type="text" name="keyword">
+					<input type="submit" value="Submit">
+					</form>'''
+
+		if "add_host?host=" in method:
+			tmp = method.split("add_host?host=")
+			tmp = tmp[1].split(" ")[0]
+			print "Adding site to banned hosts - ", tmp
+			if tmp in self.banned_hosts:
+				html = html + "<p>Host '" + tmp + "' already present in ban list</p>"
+			else:
+				html = html + "<p>Added banned host: '" + tmp + "'</p>"
+				self.banned_hosts.append(tmp)
+
+		if "del_host?host=" in method:
+			tmp = method.split("del_host?host=")
+			tmp = tmp[1].split(" ")[0]
+			if tmp in self.banned_hosts:
+				print "Removed site from banned hosts -", tmp
+				html = html + "<p>Removed banned host " + tmp + "</p>"
+				self.banned_hosts.remove(tmp)
+			else:
+				print "Tried to remove site from banned hosts, not present in ban list -", tmp
+				html = html + "<p>Ban list did not previously contain host '" + tmp + "'</p>"
+
+		if "add_keyword?keyword=" in method:
+			tmp = method.split("add_keyword?keyword=")
+			tmp = tmp[1].split(" ")[0]
+			print "Adding word to banned keywords list - ", tmp
+			if tmp in self.bad_keywords:
+				html = html + "<p>Keyword '" + tmp + "' already present in bad word list</p>"
+			else:
+				html = html + "<p>Added banned host: '" + tmp + "'</p>"
+				self.bad_keywords.append(tmp)
+
+		if "del_keyword?keyword=" in method:
+			tmp = method.split("del_keyword?keyword=")
+			tmp = tmp[1].split(" ")[0]
+			if tmp in self.bad_keywords:
+				print "Removed site from bad keywords -", tmp
+				html = html + "<p>Removed bad keyword '" + tmp + "'</p>"
+				self.bad_keywords.remove(tmp)
+			else:
+				print "Tried to remove keyword from ban list but was not present -", tmp
+				html = html + "<p>Ban list did not previously contain keyword '" + tmp + "'</p>"
+
+		html = html + '''<h3>Banned hosts</h3><ul>'''
+		for name in self.banned_hosts:
+			html = html + "<li>" + name + "</li>"
+
+		html = html + "</ul><h3>Banned keywords</h3><ul>"
+
+		for name in self.bad_keywords:
+			html = html + "<li>" + name + "</li>"
+
+		html = html + "</ul></body></html>\r\n"
+
+		conn.send(html)
+		conn.close()
+		return
 
 if __name__ == "__main__":
-	p = Proxy(port=8080)
-	
+	p = Proxy(port=8090)
+
