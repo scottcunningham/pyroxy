@@ -62,7 +62,7 @@ class Proxy:
 
 		# TODO(scottbpc): Add cache lookup
 		if host == self.hostname and port == self.port:
-			self.handle_admin(method, conn)
+			self.handle_admin(method, conn, payload, headers)
 			return
 
 		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -105,6 +105,7 @@ class Proxy:
 
 		tmp = []
 
+		# TODO(scottbpc): Fix this shit
 		for line in lines:
 			if header:
 				headers.append(line)
@@ -117,6 +118,13 @@ class Proxy:
 				tmp.append(line)
 
 		payload = ''.join(tmp)
+
+		print data	
+		print "=================="
+		print "METHOD", method
+		print "HEADERS", headers
+		print "PAYLOAD", payload
+		print "=================="
 
 		return (method, headers, payload, hostname)
 
@@ -135,30 +143,30 @@ class Proxy:
 
 		return (tmp[0], port)
 
-	def handle_admin(self, method, conn):
+	def handle_admin(self, method, conn, payload, headers):
 		html = '''<html>
-				<head><title>Admin Page</title>
+				<head><title>Admin Page</title></head>
 				<body><h1>Admin Panel</h1>
 					<h2>Add Bans</h2>
-					<form name="input" action="add_host" method="get">
+					<form name="input" action="add_host" method="post">
 						Host: <input type="text" name="host"><input type="submit" value="Submit">
 					</form>
-					<form name="input" action="add_keyword" method="get">
+					<form name="input" action="add_keyword" method="post">
 						Keyword: <input type="text" name="keyword">
 					<input type="submit" value="Submit">
 					</form>
 					<h2>Remove Bans</h2>
-					<form name="input" action="del_host" method="get">
+					<form name="input" action="del_host" method="post">
 						Host: <input type="text" name="host"><input type="submit" value="Submit">
 					</form>
-					<form name="input" action="del_keyword" method="get">
+					<form name="input" action="del_keyword" method="post">
 						Keyword: <input type="text" name="keyword">
 					<input type="submit" value="Submit">
 					</form>'''
+		
 
-		if "add_host?host=" in method:
-			tmp = method.split("add_host?host=")
-			tmp = tmp[1].split(" ")[0]
+		if "POST /add_host" in method:
+			tmp = payload.split("host=")[1]
 			print "Adding site to banned hosts - ", tmp
 			if tmp in self.banned_hosts:
 				html = html + "<p>Host '" + tmp + "' already present in ban list</p>"
@@ -166,7 +174,7 @@ class Proxy:
 				html = html + "<p>Added banned host: '" + tmp + "'</p>"
 				self.banned_hosts.append(tmp)
 
-		if "del_host?host=" in method:
+		if "POST /del_host" in method:
 			tmp = method.split("del_host?host=")
 			tmp = tmp[1].split(" ")[0]
 			if tmp in self.banned_hosts:
@@ -177,7 +185,7 @@ class Proxy:
 				print "Tried to remove site from banned hosts, not present in ban list -", tmp
 				html = html + "<p>Ban list did not previously contain host '" + tmp + "'</p>"
 
-		if "add_keyword?keyword=" in method:
+		if "POST /add_keyword" in method:
 			tmp = method.split("add_keyword?keyword=")
 			tmp = tmp[1].split(" ")[0]
 			print "Adding word to banned keywords list - ", tmp
@@ -187,7 +195,7 @@ class Proxy:
 				html = html + "<p>Added banned host: '" + tmp + "'</p>"
 				self.bad_keywords.append(tmp)
 
-		if "del_keyword?keyword=" in method:
+		if "POST /del_keyword" in method:
 			tmp = method.split("del_keyword?keyword=")
 			tmp = tmp[1].split(" ")[0]
 			if tmp in self.bad_keywords:
@@ -207,7 +215,13 @@ class Proxy:
 		for name in self.bad_keywords:
 			html = html + "<li>" + name + "</li>"
 
-		html = html + "</ul></body></html>\r\n"
+		html = html + "</ul>"
+
+		html = html + "<h3>Cached pages:</h3><ul>"
+	
+		html = html + "<li>None</li>"
+
+		html = html + "</ul></body></html>" + "\r\n"
 
 		conn.send(html)
 		conn.close()
