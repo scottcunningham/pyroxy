@@ -1,20 +1,23 @@
 import socket
+import gzip
+import StringIO
 from thread import *
 
 class Proxy:
 
-	def __init__(self, hostname="localhost", port=8080):
+	def __init__(self, hostname="localhost", port=8080, downstream_proxy=""):
 		self.hostname = hostname
 		self.port = port 
+		self.downstream_proxy = downstream_proxy
 
 		# TODO(scottbpc): Set up cache
 		
 		print "Listening on", hostname + ", port", port
 
-		self.banned_hosts = open("banned_hosts.conf").read().split("\n")
+		self.banned_hosts = open("banned_hosts.conf").read().split("\n")[:-1]
 		print "Banned hosts are:", self.banned_hosts
 
-		self.bad_keywords = open("bad_keywords.conf").read().split("\n")
+		self.bad_keywords = open("bad_keywords.conf").read().split("\n")[:-1]
 		print "Banned keywords are:", self.bad_keywords
 
 		self.banned_html = open("resources/banned.html").read()
@@ -38,40 +41,53 @@ class Proxy:
 			conn, addr = self.socket.accept()
 					
 			print "Connection from", addr[0] + ":" +  str(addr[1])	
-			start_new_thread(self.handle, (conn,))
+			start_new_thread(self.handle, (conn, addr))
 
-	def handle(self, conn):
+	def handle(self, conn, addr):
 
-		data = conn.recv(4096)	
+		data = conn.recv(8192)	
 
-		#TODO(scottbpc): Check for HTTPS traffic and reject it
+		(method, headers, payload, hostname, gzipped) = self.parse_http(data)
 
-		(method, headers, payload, hostname) = self.parse_http(data)
+		if self.downstream_proxy is not "":
+			hostname = self.downstream_proxy
 
 		if hostname in self.banned_hosts:
+			print "[IP", addr[0], "trying to access banned host", hostname, "- blocked]"
 			conn.send(self.banned_html + "\r\n")
 			conn.close()
 			return	
 	
-		# TODO(scottbpc): Check payload for banned phrases
+		if gzipped:
+			payload = gzip.GzipFile(fileobj=StringIO(payload)).read()
+
+		# TODO(scottbpc): Test keyword lookup once payload is extracted properly
+		for keyword in self.bad_keywords:
+			if keyword in payload:
+				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
 
 		(host, port) = self.parse_host(hostname)
 
 		if host is None:
-			print "Host Error: error parsing", hostname
+			print "[Host Error: error parsing", hostname, "]"
+			conn.send("<html><h1>Host Error: Could not parse " + hostname + " (note: HTTPS is not supported)</h1></html>")
+			conn.close()
+			return
 
 		# TODO(scottbpc): Add cache lookup
 		if host == self.hostname and port == self.port:
+			print "[IP", addr[0], "accessing admin panel]"
 			self.handle_admin(method, conn, payload, headers)
 			return
 
 		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		outgoing.settimeout(10)
+		outgoing.settimeout(1)
 
 		try:
+			print "~connecting outbound to", host, port
 			outgoing.connect((host, port))
 		except:
-			print "DNS error - could not resolve host", host
+			print "DNS error - could not resolve host", host, " - may be garbled HTTPS header"
 			print "Full hostname was", hostname
 			conn.send(self.dns_error_html + "\r\n")	
 			conn.close
@@ -84,13 +100,16 @@ class Proxy:
 
 		while True:
 	 		try:
-				data = outgoing.recv(4096)
-				conn.send(data)
+				data += outgoing.recv(1024)
+				if not data:
+					break
+				#conn.send(data)
 			except:
-				pass		
+				break	
 			if not data: 
 				break
-		
+		conn.send(data)
+
 		conn.send("\r\n")	
 		conn.close()
 
@@ -102,31 +121,23 @@ class Proxy:
 		headers = []
 		payload = ""
 		hostname = ""
-
-		tmp = []
+		gzipped = False
 
 		# TODO(scottbpc): Fix this shit
 		for line in lines:
 			if header:
 				headers.append(line)
+				if "Content-Encoding" in line:
+					if line.split("Content-Encoding:")[1] == "gzip":
+						gzipped = True
 				if line.split(":")[0] == "Host":
 					hostname = line.split("Host: ")[1]
-			elif line == "\r\n":
-				header = False
+			elif line == '':
+				break
 
-			else:
-				tmp.append(line)
+		payload = lines[-1:][0]
 
-		payload = ''.join(tmp)
-
-		print data	
-		print "=================="
-		print "METHOD", method
-		print "HEADERS", headers
-		print "PAYLOAD", payload
-		print "=================="
-
-		return (method, headers, payload, hostname)
+		return (method, headers, payload, hostname, gzipped)
 
 	def parse_host(self, host):
 		tmp = host.split(":")
@@ -144,24 +155,26 @@ class Proxy:
 		return (tmp[0], port)
 
 	def handle_admin(self, method, conn, payload, headers):
-		html = '''<html>
-				<head><title>Admin Page</title></head>
+		html = '''<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+		        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+				<html xmlns="http://www.w3.org/1999/xhtml">
+				<head>
+					<title>Admin Panel</title>
+				</head>
 				<body><h1>Admin Panel</h1>
 					<h2>Add Bans</h2>
-					<form name="input" action="add_host" method="post">
-						Host: <input type="text" name="host"><input type="submit" value="Submit">
+					<form action="add_host" method="post">
+						<p>Host: <input type="text" name="host"/></p>
 					</form>
-					<form name="input" action="add_keyword" method="post">
-						Keyword: <input type="text" name="keyword">
-					<input type="submit" value="Submit">
+					<form action="add_keyword" method="post">
+						<p>Keyword: <input type="text" name="keyword"/></p>
 					</form>
 					<h2>Remove Bans</h2>
-					<form name="input" action="del_host" method="post">
-						Host: <input type="text" name="host"><input type="submit" value="Submit">
+					<form action="del_host" method="post">
+						<p>Host: <input type="text" name="host"/></p>
 					</form>
-					<form name="input" action="del_keyword" method="post">
-						Keyword: <input type="text" name="keyword">
-					<input type="submit" value="Submit">
+					<form action="del_keyword" method="post">
+						<p>Keyword: <input type="text" name="keyword"/></p>
 					</form>'''
 		
 
@@ -169,64 +182,68 @@ class Proxy:
 			tmp = payload.split("host=")[1]
 			print "Adding site to banned hosts - ", tmp
 			if tmp in self.banned_hosts:
-				html = html + "<p>Host '" + tmp + "' already present in ban list</p>"
+				html = html + " <p>Host '" + tmp + "' already present in ban list</p>"
 			else:
-				html = html + "<p>Added banned host: '" + tmp + "'</p>"
+				html = html + " <p>Added banned host: '" + tmp + "'</p>"
 				self.banned_hosts.append(tmp)
 
 		if "POST /del_host" in method:
-			tmp = method.split("del_host?host=")
-			tmp = tmp[1].split(" ")[0]
+			tmp = payload.split("host=")[1]
 			if tmp in self.banned_hosts:
 				print "Removed site from banned hosts -", tmp
-				html = html + "<p>Removed banned host " + tmp + "</p>"
+				html = html + " <p>Removed banned host " + tmp + "</p>"
 				self.banned_hosts.remove(tmp)
 			else:
 				print "Tried to remove site from banned hosts, not present in ban list -", tmp
-				html = html + "<p>Ban list did not previously contain host '" + tmp + "'</p>"
+				html = html + "<p> Banned hosts list did not previously contain host '" + tmp + "'</p>"
 
 		if "POST /add_keyword" in method:
-			tmp = method.split("add_keyword?keyword=")
-			tmp = tmp[1].split(" ")[0]
+			tmp = payload.split("keyword=")[1]
 			print "Adding word to banned keywords list - ", tmp
 			if tmp in self.bad_keywords:
-				html = html + "<p>Keyword '" + tmp + "' already present in bad word list</p>"
+				html = html + " <p>Keyword '" + tmp + "' already present in bad word list</p>"
 			else:
-				html = html + "<p>Added banned host: '" + tmp + "'</p>"
+				html = html + " <p>Added banned keyword: '" + tmp + "'</p>"
 				self.bad_keywords.append(tmp)
 
 		if "POST /del_keyword" in method:
-			tmp = method.split("del_keyword?keyword=")
-			tmp = tmp[1].split(" ")[0]
+			tmp = payload.split("keyword=")[1]
 			if tmp in self.bad_keywords:
 				print "Removed site from bad keywords -", tmp
-				html = html + "<p>Removed bad keyword '" + tmp + "'</p>"
+				html = html + "<p> Removed bad keyword '" + tmp + "'</p>"
 				self.bad_keywords.remove(tmp)
 			else:
 				print "Tried to remove keyword from ban list but was not present -", tmp
-				html = html + "<p>Ban list did not previously contain keyword '" + tmp + "'</p>"
+				html = html + "<p> Ban list did not previously contain keyword '" + tmp + "'</p>"
 
-		html = html + '''<h3>Banned hosts</h3><ul>'''
-		for name in self.banned_hosts:
-			html = html + "<li>" + name + "</li>"
+		html = html + ''' <h3>Banned hosts</h3><ul>'''
+		
+		if len(self.banned_hosts) == 0:
+			html = html + " <p>(None) </p>"
 
-		html = html + "</ul><h3>Banned keywords</h3><ul>"
+		else:
+			for name in self.banned_hosts:
+				html = html + " <li>\"" + name + "\"</li>"
+
+		html = html + " </ul><h3>Banned keywords</h3><ul>"
+
+		if len(self.bad_keywords) == 0:
+			html = html + " <li>(None)</li>"
 
 		for name in self.bad_keywords:
-			html = html + "<li>" + name + "</li>"
+			html = html + " <li>\"" + name + "\"</li>"
 
-		html = html + "</ul>"
-
-		html = html + "<h3>Cached pages:</h3><ul>"
+		html = html + " </ul>"
+		
+		html = html + " <h3>Cached pages:</h3><ul>"
 	
-		html = html + "<li>None</li>"
+		html = html + " <li>(None)</li>"
+		html = html + " </ul> </body> </html>"
 
-		html = html + "</ul></body></html>" + "\r\n"
-
-		conn.send(html)
+		conn.send(html + "\r\n")
 		conn.close()
 		return
 
 if __name__ == "__main__":
-	p = Proxy(port=8090)
+	p = Proxy(port=8080)
 
