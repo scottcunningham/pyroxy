@@ -6,7 +6,9 @@ from thread import *
 
 class Proxy:
 
+	# The proxy will by default listen on localhost:8080, no downstream proxy, with 64 cached items
 	def __init__(self, hostname="localhost", port=8080, downstream_proxy="", max_cache = 64):
+
 		self.hostname = hostname
 		self.port = port 
 		self.downstream_proxy = downstream_proxy
@@ -15,25 +17,26 @@ class Proxy:
 
 		print "Listening on", hostname + ", port", port
 
+		# Banned hosts and bad keywords are loaded from text files in the current directory,
+		# separated by newlines. The [:-1] simply removes the last item, which will be empty
 		self.banned_hosts = open("banned_hosts.conf").read().split("\n")[:-1]
 		print "Banned hosts are:", self.banned_hosts
 
 		self.bad_keywords = open("bad_keywords.conf").read().split("\n")[:-1]
 		print "Banned keywords are:", self.bad_keywords
 
+		# Custom HTML pages are loaded from the resources/ directory.
+		# These are used for responses to various bad queries.
 		self.banned_html = open("resources/banned.html").read()
-
-		self.admin_html= open("resources/admin.html").read()
-
 		self.dns_error_html = open("resources/dns.html").read()
 	
 		print "Starting up. Good luck."
 
-		self.cache.add("hello.ie", "<html><body><h1>hiya</h1></body></html>")
-
 		self.loop_forever()
 
 	def loop_forever(self):
+
+		# Here, we listen on the assigned port and address, and accept connections
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	
 		self.socket.bind((self.hostname, self.port))
@@ -41,6 +44,7 @@ class Proxy:
 		self.socket.listen(10000)
 
 		while True:
+			# Accept connections, and dispatch a new thread to deal with them
 			conn, addr = self.socket.accept()
 					
 			print "Connection from", addr[0] + ":" +  str(addr[1])	
@@ -48,26 +52,27 @@ class Proxy:
 
 	def handle(self, conn, addr):
 
+		# Recieve the request from the browser
 		data = conn.recv(8192)	
 
+		# Parse the method, headers, payload and hostname from the HTTP req. - this is explained
+		# more thoroughly in the function itself
 		(method, headers, payload, hostname) = self.parse_http(data)
 
+		# If the hostname the user is trying to reach is banned, we simply return the "site banned"
+		# html to the user's browser 
 		if hostname in self.banned_hosts:
 			print "[IP", addr[0], "trying to access banned host", hostname, "- blocked]"
 			conn.send(self.banned_html + "\r\n")
 			conn.close()
 			return	
 	
+		# If we are using a downstream proxy (eg www-proxy.scss.tcd.ie:8000 or proxyc.tcd.ie:8080)
+		# we send the request to the proxy, which will pass it on
 		if self.downstream_proxy is not "":
 			hostname = self.downstream_proxy
 
-		if gzipped:
-			payload = gzip.GzipFile(fileobj=StringIO(payload)).read()
-
-		for keyword in self.bad_keywords:
-			if keyword in payload:
-				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
-
+		# Parse the hostname and port to connect to
 		(host, port) = self.parse_host(hostname)
 
 		if host is None:
@@ -76,53 +81,74 @@ class Proxy:
 			conn.close()
 			return
 
-		url = hostname
-
-		tmp = self.cache.lookup(url)
-		
-		if tmp is not None:
-			conn.send(tmp + "\r\n")
-			conn.close()
-			return
-
+		# If the user navigates to the host and port we are listening on, they will get the webUI -
+		# the handle_admin function deals with this
 		if host == self.hostname and port == self.port:
 			print "[IP", addr[0], "accessing admin panel]"
 			self.handle_admin(method, conn, payload, headers)
 			return
 
+		# Look for this address in the cache
+		response = self.cache.lookup(hostname)
+		
+		# If it is cached, send it to the user
+		if response is not None:
+			conn.send(tmp + "\r\n")
+			conn.close()
+			return
+
+		# Otherwise, retrieve te response
 		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		outgoing.settimeout(1)
 
 		try:
 			outgoing.connect((host, port))
 		except:
-			print "DNS error - could not resolve host \"", host, "\" - may be garbled HTTPS header"
+			print "Error - could not resolve host \"", host, "\" (may be garbled HTTPS header)"
 			print "Full hostname was", hostname
 			conn.send(self.dns_error_html + "\r\n")	
 			conn.close
 			outgoing.close()
 			return
 
+		# Send the original request outbound
 		outgoing.send(data + "\r\n")
 
-		data = ""
+		response = ""
 
 		while True:
 	 		try:
-				data += outgoing.recv(1024)
-				if not data:
+				response += outgoing.recv(1024)
+				if not response:
 					break
-				#conn.send(data)
 			except:
 				break	
 			if not data: 
 				break
-		conn.send(data)
-		conn.send("\r\n")	
-		
-		self.cache.add(url, data)
-		
+
+		# Check the response to see whether the payload is gzipped
+		if "Content Encoding" in response and "gzip" in response:
+			gzipped = True
+		else:
+			gzipped = False
+
+		print "!!!!!!!", response, "!!!!!!"
+
+		# Gunzip it if we need to
+		if gzipped:
+			response = gzip.GzipFile(fileobj=StringIO(response)).read()
+
+		# And search for bad keywords
+		for keyword in self.bad_keywords:
+			if keyword in response:
+				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
+
+		conn.send(response)
+		conn.send("\r\n")
 		conn.close()
+	
+		self.cache.add(hostname, data)
+		return		
 
 	def parse_http(self, data):
 		lines = data.split("\r\n")
