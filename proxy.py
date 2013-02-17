@@ -76,7 +76,7 @@ class Proxy:
 			conn.close()
 			return
 
-		url = self.parse_url(method, hostname)
+		url = hostname
 
 		tmp = self.cache.lookup(url)
 		
@@ -181,6 +181,7 @@ class Proxy:
 			page = self.cache.lookup(tmp)
 			print "CACHED ITEM WAS " + page
 			conn.send(page + "\r\n")
+			conn.close()
 			return
 
 		conn.send('''<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">''')
