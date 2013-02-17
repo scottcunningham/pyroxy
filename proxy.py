@@ -1,17 +1,18 @@
 import socket
 import gzip
 import StringIO
+import cache
 from thread import *
 
 class Proxy:
 
-	def __init__(self, hostname="localhost", port=8080, downstream_proxy=""):
+	def __init__(self, hostname="localhost", port=8080, downstream_proxy="", max_cache = 64):
 		self.hostname = hostname
 		self.port = port 
 		self.downstream_proxy = downstream_proxy
 
-		# TODO(scottbpc): Set up cache
-		
+		self.cache = cache.Cache(max_cache)
+
 		print "Listening on", hostname + ", port", port
 
 		self.banned_hosts = open("banned_hosts.conf").read().split("\n")[:-1]
@@ -27,6 +28,8 @@ class Proxy:
 		self.dns_error_html = open("resources/dns.html").read()
 	
 		print "Starting up. Good luck."
+
+		self.cache.add("hello.ie", "<html><body><h1>hiya</h1></body></html>")
 
 		self.loop_forever()
 
@@ -49,19 +52,18 @@ class Proxy:
 
 		(method, headers, payload, hostname, gzipped) = self.parse_http(data)
 
-		if self.downstream_proxy is not "":
-			hostname = self.downstream_proxy
-
 		if hostname in self.banned_hosts:
 			print "[IP", addr[0], "trying to access banned host", hostname, "- blocked]"
 			conn.send(self.banned_html + "\r\n")
 			conn.close()
 			return	
 	
+		if self.downstream_proxy is not "":
+			hostname = self.downstream_proxy
+
 		if gzipped:
 			payload = gzip.GzipFile(fileobj=StringIO(payload)).read()
 
-		# TODO(scottbpc): Test keyword lookup once payload is extracted properly
 		for keyword in self.bad_keywords:
 			if keyword in payload:
 				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
@@ -74,7 +76,15 @@ class Proxy:
 			conn.close()
 			return
 
-		# TODO(scottbpc): Add cache lookup
+		url = self.parse_url(method, hostname)
+
+		tmp = self.cache.lookup(url)
+		
+		if tmp is not None:
+			conn.send(tmp + "\r\n")
+			conn.close()
+			return
+
 		if host == self.hostname and port == self.port:
 			print "[IP", addr[0], "accessing admin panel]"
 			self.handle_admin(method, conn, payload, headers)
@@ -84,10 +94,9 @@ class Proxy:
 		outgoing.settimeout(1)
 
 		try:
-			print "~connecting outbound to", host, port
 			outgoing.connect((host, port))
 		except:
-			print "DNS error - could not resolve host", host, " - may be garbled HTTPS header"
+			print "DNS error - could not resolve host \"", host, "\" - may be garbled HTTPS header"
 			print "Full hostname was", hostname
 			conn.send(self.dns_error_html + "\r\n")	
 			conn.close
@@ -109,8 +118,10 @@ class Proxy:
 			if not data: 
 				break
 		conn.send(data)
-
 		conn.send("\r\n")	
+		
+		self.cache.add(url, data)
+		
 		conn.close()
 
 	def parse_http(self, data):
@@ -123,7 +134,6 @@ class Proxy:
 		hostname = ""
 		gzipped = False
 
-		# TODO(scottbpc): Fix this shit
 		for line in lines:
 			if header:
 				headers.append(line)
@@ -138,6 +148,15 @@ class Proxy:
 		payload = lines[-1:][0]
 
 		return (method, headers, payload, hostname, gzipped)
+
+	def parse_url(self, method, hostname):
+		tmp = method.split("GET ")[1].split(" HTTP")[0]
+		if tmp == "/":
+			return hostname
+		if hostname[-1:] == "/":
+			return hostname[:-1] + tmp
+
+		return hostname + tmp
 
 	def parse_host(self, host):
 		tmp = host.split(":")
@@ -155,92 +174,109 @@ class Proxy:
 		return (tmp[0], port)
 
 	def handle_admin(self, method, conn, payload, headers):
-		html = '''<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
-		        "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
-				<html xmlns="http://www.w3.org/1999/xhtml">
-				<head>
-					<title>Admin Panel</title>
-				</head>
-				<body><h1>Admin Panel</h1>
-					<h2>Add Bans</h2>
-					<form action="add_host" method="post">
-						<p>Host: <input type="text" name="host"/></p>
-					</form>
-					<form action="add_keyword" method="post">
-						<p>Keyword: <input type="text" name="keyword"/></p>
-					</form>
-					<h2>Remove Bans</h2>
-					<form action="del_host" method="post">
-						<p>Host: <input type="text" name="host"/></p>
-					</form>
-					<form action="del_keyword" method="post">
-						<p>Keyword: <input type="text" name="keyword"/></p>
-					</form>'''
-		
+
+		if "GET /get_cache?url=" in method:
+			tmp = method.split("/get_cache?url=")[1].split(" HTTP")[0]
+			print "[Fetching cache item for user - ", tmp + "]"
+			page = self.cache.lookup(tmp)
+			print "CACHED ITEM WAS " + page
+			conn.send(page + "\r\n")
+			return
+
+		conn.send('''<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">''')
+		conn.send('''<html xmlns="http://www.w3.org/1999/xhtml">''')
+		conn.send('''<head><title>Admin Panel</title></head>''')
+		conn.send('''<body><h1>Admin Panel</h1><h2>Add Bans</h2>''')
+		conn.send('''<form action="add_host" method="post">''')
+		conn.send('''<p>Host: <input type="text" name="host"/></p></form>''')
+		conn.send('''<form action="add_keyword" method="post"><p>Keyword: <input type="text" name="keyword"/></p></form>''')
+		conn.send('''<h2>Remove Bans</h2>''')
+		conn.send('''<form action="del_host" method="post">''')
+		conn.send('''<p>Host: <input type="text" name="host"/></p></form>''')
+		conn.send('''<form action="del_keyword" method="post">''')
+		conn.send('''<p>Keyword: <input type="text" name="keyword"/></p></form>''')
+
+		html = ""
 
 		if "POST /add_host" in method:
 			tmp = payload.split("host=")[1]
 			print "Adding site to banned hosts - ", tmp
 			if tmp in self.banned_hosts:
-				html = html + " <p>Host '" + tmp + "' already present in ban list</p>"
+				html += " <p>Host '" + tmp + "' already present in ban list</p>"
 			else:
-				html = html + " <p>Added banned host: '" + tmp + "'</p>"
+				html += " <p>Added banned host: '" + tmp + "'</p>"
 				self.banned_hosts.append(tmp)
+
+		conn.send(html)
+		html = ""
 
 		if "POST /del_host" in method:
 			tmp = payload.split("host=")[1]
 			if tmp in self.banned_hosts:
 				print "Removed site from banned hosts -", tmp
-				html = html + " <p>Removed banned host " + tmp + "</p>"
+				html += " <p>Removed banned host " + tmp + "</p>"
 				self.banned_hosts.remove(tmp)
 			else:
 				print "Tried to remove site from banned hosts, not present in ban list -", tmp
-				html = html + "<p> Banned hosts list did not previously contain host '" + tmp + "'</p>"
+				html += "<p> Banned hosts list did not previously contain host '" + tmp + "'</p>"
+
+		conn.send(html)
+		html = ""		
 
 		if "POST /add_keyword" in method:
 			tmp = payload.split("keyword=")[1]
 			print "Adding word to banned keywords list - ", tmp
 			if tmp in self.bad_keywords:
-				html = html + " <p>Keyword '" + tmp + "' already present in bad word list</p>"
+				html += " <p>Keyword '" + tmp + "' already present in bad word list</p>"
 			else:
-				html = html + " <p>Added banned keyword: '" + tmp + "'</p>"
+				html += " <p>Added banned keyword: '" + tmp + "'</p>"
 				self.bad_keywords.append(tmp)
+		conn.send(html)
+		html = ""
 
 		if "POST /del_keyword" in method:
 			tmp = payload.split("keyword=")[1]
 			if tmp in self.bad_keywords:
 				print "Removed site from bad keywords -", tmp
-				html = html + "<p> Removed bad keyword '" + tmp + "'</p>"
+				html += "<p> Removed bad keyword '" + tmp + "'</p>"
 				self.bad_keywords.remove(tmp)
 			else:
 				print "Tried to remove keyword from ban list but was not present -", tmp
-				html = html + "<p> Ban list did not previously contain keyword '" + tmp + "'</p>"
+				html += "<p> Ban list did not previously contain keyword '" + tmp + "'</p>"
 
-		html = html + ''' <h3>Banned hosts</h3><ul>'''
+		conn.send(html)
+		conn.send("<h3>Banned hosts</h3><ul>")
+		html = ""
 		
 		if len(self.banned_hosts) == 0:
-			html = html + " <p>(None) </p>"
+			html += " <p>(None) </p>"
 
 		else:
 			for name in self.banned_hosts:
-				html = html + " <li>\"" + name + "\"</li>"
+				html += " <li>\"" + name + "\"</li>"
 
-		html = html + " </ul><h3>Banned keywords</h3><ul>"
+		conn.send(html)
+		conn.send(" </ul><h3>Banned keywords</h3><ul>")
+		html = ""
 
 		if len(self.bad_keywords) == 0:
-			html = html + " <li>(None)</li>"
+			html += " <li>(None)</li>"
 
 		for name in self.bad_keywords:
-			html = html + " <li>\"" + name + "\"</li>"
+			html += " <li>\"" + name + "\"</li>"
 
-		html = html + " </ul>"
+		conn.send(html)
+		conn.send("</ul><h3>Cached pages:</h3><ul>")
 		
-		html = html + " <h3>Cached pages:</h3><ul>"
-	
-		html = html + " <li>(None)</li>"
-		html = html + " </ul> </body> </html>"
+		html = ""
 
-		conn.send(html + "\r\n")
+		pages = self.cache.get_all()
+		for url in pages.keys():
+			html += "<li> <a href=\"/get_cache?url=" + url + "\">" + url + "</a></li>"
+
+		conn.send(html)
+		conn.send("</ul> </body> </html>\r\n")
+
 		conn.close()
 		return
 
