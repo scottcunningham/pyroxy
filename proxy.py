@@ -28,7 +28,7 @@ class Proxy:
 		# Custom HTML pages are loaded from the resources/ directory.
 		# These are used for responses to various bad queries.
 		self.banned_html = open("resources/banned.html").read()
-		self.dns_error_html = open("resources/dns.html").read()
+		self.connect_error_html = open("resources/connect.html").read()
 	
 		print "Starting up. Good luck."
 
@@ -76,8 +76,7 @@ class Proxy:
 		(host, port) = self.parse_host(hostname)
 
 		if host is None:
-			print "[Host Error: error parsing", hostname, "]"
-			conn.send("<html><h1>Host Error: Could not parse " + hostname + " (note: HTTPS is not supported)</h1></html>")
+			conn.send("<html><h1>Host Error: Could not parse " + hostname + " (note: HTTPS is not supported)</h1></html>\r\n")
 			conn.close()
 			return
 
@@ -89,13 +88,15 @@ class Proxy:
 			return
 
 		# Look for this address in the cache
-		response = self.cache.lookup(hostname)
+		#response = self.cache.lookup(hostname)
 		
 		# If it is cached, send it to the user
-		if response is not None:
-			conn.send(tmp + "\r\n")
+		
+		'''if response is not None:
+			conn.send(response + "\r\n")
 			conn.close()
 			return
+		'''
 
 		# Otherwise, retrieve te response
 		outgoing = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -104,9 +105,8 @@ class Proxy:
 		try:
 			outgoing.connect((host, port))
 		except:
-			print "Error - could not resolve host \"", host, "\" (may be garbled HTTPS header)"
-			print "Full hostname was", hostname
-			conn.send(self.dns_error_html + "\r\n")	
+			print "Error - could not connect to \"", host, "\" (may be garbled HTTPS header)"
+			conn.send(self.connect_error_html + "\r\n")	
 			conn.close
 			outgoing.close()
 			return
@@ -126,59 +126,44 @@ class Proxy:
 			if not data: 
 				break
 
+		response_payload = response.split("\r\n")[-1:]
+		response_headers = response.split("\r\n")[1:][:-2]
+	
+		gzipped = False
 		# Check the response to see whether the payload is gzipped
-		if "Content Encoding" in response and "gzip" in response:
-			gzipped = True
-		else:
-			gzipped = False
-
-		print "!!!!!!!", response, "!!!!!!"
+		for line in response_headers:
+			if "Content Encoding" in response and "gzip" in response:
+				gzipped = True
 
 		# Gunzip it if we need to
 		if gzipped:
-			response = gzip.GzipFile(fileobj=StringIO(response)).read()
+			response_payload = gzip.GzipFile(fileobj=StringIO(response_payload)).read()
 
 		# And search for bad keywords
 		for keyword in self.bad_keywords:
-			if keyword in response:
+			if keyword in response_payload:
 				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
 
 		conn.send(response)
 		conn.send("\r\n")
 		conn.close()
-	
-		self.cache.add(hostname, data)
+
+		#self.cache.add(hostname, response)
 		return		
 
 	def parse_http(self, data):
 		lines = data.split("\r\n")
+		
 		method = lines[0]
-
-		header = True
-		headers = []
-		payload = ""
+		headers = lines[1:][:-2]
 		hostname = ""
-
-		for line in lines:
-			if header:
-				headers.append(line)
-				if line.split(":")[0] == "Host":
-					hostname = line.split("Host: ")[1]
-			elif line == '':
-				break
-
 		payload = lines[-1:][0]
 
+		for line in headers:
+			if line.split(":")[0] == "Host":
+				hostname = line.split("Host: ")[1]
+	
 		return (method, headers, payload, hostname)
-
-	def parse_url(self, method, hostname):
-		tmp = method.split("GET ")[1].split(" HTTP")[0]
-		if tmp == "/":
-			return hostname
-		if hostname[-1:] == "/":
-			return hostname[:-1] + tmp
-
-		return hostname + tmp
 
 	def parse_host(self, host):
 		tmp = host.split(":")
@@ -197,11 +182,13 @@ class Proxy:
 
 	def handle_admin(self, method, conn, payload, headers):
 
+		print "ADMIN:", method, " |", headers, "|", payload
+
 		if "GET /get_cache?url=" in method:
+			print "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 			tmp = method.split("/get_cache?url=")[1].split(" HTTP")[0]
 			print "[Fetching cache item for user - ", tmp + "]"
 			page = self.cache.lookup(tmp)
-			print "CACHED ITEM WAS " + page
 			conn.send(page + "\r\n")
 			conn.close()
 			return
@@ -254,6 +241,7 @@ class Proxy:
 			else:
 				html += " <p>Added banned keyword: '" + tmp + "'</p>"
 				self.bad_keywords.append(tmp)
+
 		conn.send(html)
 		html = ""
 
@@ -298,11 +286,11 @@ class Proxy:
 			html += "<li> <a href=\"/get_cache?url=" + url + "\">" + url + "</a></li>"
 
 		conn.send(html)
-		conn.send("</ul> </body> </html>\r\n")
+		conn.send("</ul> </body> </html>" + "\r\n")
 
 		conn.close()
 		return
-
+	
 if __name__ == "__main__":
-	p = Proxy(port=8090)
+	p = Proxy(port=8080)
 
