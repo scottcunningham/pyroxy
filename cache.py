@@ -37,3 +37,6 @@ class Cache:
 			# Add item to cache
 			self.urls.append(url)
 			self.contents[url] = payload
+
+		def get_all(self):
+			return self.contents
