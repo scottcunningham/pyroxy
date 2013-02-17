@@ -50,7 +50,7 @@ class Proxy:
 
 		data = conn.recv(8192)	
 
-		(method, headers, payload, hostname, gzipped) = self.parse_http(data)
+		(method, headers, payload, hostname) = self.parse_http(data)
 
 		if hostname in self.banned_hosts:
 			print "[IP", addr[0], "trying to access banned host", hostname, "- blocked]"
@@ -132,14 +132,10 @@ class Proxy:
 		headers = []
 		payload = ""
 		hostname = ""
-		gzipped = False
 
 		for line in lines:
 			if header:
 				headers.append(line)
-				if "Content-Encoding" in line:
-					if line.split("Content-Encoding:")[1] == "gzip":
-						gzipped = True
 				if line.split(":")[0] == "Host":
 					hostname = line.split("Host: ")[1]
 			elif line == '':
@@ -147,7 +143,7 @@ class Proxy:
 
 		payload = lines[-1:][0]
 
-		return (method, headers, payload, hostname, gzipped)
+		return (method, headers, payload, hostname)
 
 	def parse_url(self, method, hostname):
 		tmp = method.split("GET ")[1].split(" HTTP")[0]
@@ -282,5 +278,5 @@ class Proxy:
 		return
 
 if __name__ == "__main__":
-	p = Proxy(port=8080)
+	p = Proxy(port=8090)
 
