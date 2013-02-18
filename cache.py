@@ -19,8 +19,7 @@ class Cache:
 
 	def add(self, url, payload):
 
-		print "Adding", url, "to cache"
-		print "Data payload is", payload
+		print "[Adding", url, "to cache]"
 
 		if url in self.urls:
 			print "[Item", url, "already present in cache]"
@@ -35,7 +34,7 @@ class Cache:
 				tmp = self.urls.popleft()
 				# Remove this item from cache
 				del self.urls[tmp]
-				print "Removed URL", tmp, "from cache"
+				print "[Removed URL", tmp, "from cache]"
 			# Add item to cache
 			self.urls.append(url)
 			self.contents[url] = payload
