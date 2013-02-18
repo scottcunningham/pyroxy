@@ -1,4 +1,5 @@
 from Queue import deque
+from threading import Lock
 
 class Cache:
 
@@ -15,10 +16,11 @@ class Cache:
 			# Return the payload
 			return self.contents[url]
 		return None
-	
+
 	def add(self, url, payload):
 
 		print "Adding", url, "to cache"
+		print "Data payload is", payload
 
 		if url in self.urls:
 			print "[Item", url, "already present in cache]"
@@ -38,5 +40,5 @@ class Cache:
 			self.urls.append(url)
 			self.contents[url] = payload
 
-		def get_all(self):
-			return self.contents
+	def get_all(self):
+		return self.contents
