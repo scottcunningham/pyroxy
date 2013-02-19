@@ -1,6 +1,5 @@
 import socket
-import gzip
-import StringIO
+import zlib
 import cache
 import re
 from thread import *
@@ -16,24 +15,24 @@ class Proxy:
 
 		self.cache = cache.Cache(max_cache)
 
-		print "Listening on", hostname + ", port", port
+		print " * Listening on", hostname + ", port", port
 
 		# Banned hosts and bad keywords are loaded from text files in the current directory,
 		# separated by newlines. The [:-1] simply removes the last item, which will be empty
 		self.banned_hosts = open("banned_hosts.conf").read().split("\n")[:-1]
-		print "Banned hosts are:", self.banned_hosts
+		print " * Banned hosts are:", self.banned_hosts
 
 		self.bad_keywords = open("bad_keywords.conf").read().split("\n")[:-1]
-		print "Banned keywords are:", self.bad_keywords
+		print " * Bad keywords are:", self.bad_keywords
 
 		# Custom HTML pages are loaded from the resources/ directory.
 		# These are used for responses to various bad queries.
 		self.banned_html = open("resources/banned.html").read()
 		self.connect_error_html = open("resources/connect.html").read()
 	
-		print "Starting up. Good luck."
+		print "== Starting up. Good luck."
 
-		self.cache.add("hello.de", "<html><h1>aaa</h1></html>")
+		self.cache.add("hello.de", "<html><h1>Test cache page</h1></html>")
 
 		self.loop_forever()
 
@@ -50,7 +49,7 @@ class Proxy:
 			# Accept connections, and dispatch a new thread to deal with them
 			conn, addr = self.socket.accept()
 					
-			# print "Connection from", addr[0] + ":" +  str(addr[1])	
+			print "* Connection from", addr[0] + ":" +  str(addr[1])	
 			start_new_thread(self.handle, (conn, addr))
 
 	def handle(self, conn, addr):
@@ -68,37 +67,13 @@ class Proxy:
 			conn.close()
 			return
 
-		'''
-		The problem with Accept-Encoding:
-		If the payload is gzipped, then searching for keywords would be fine: we could just
-		gunzip the payload. 
-		However, there are N ways of encoding the payload of the data, and writing code to decompress
-		each of these would be too heavy. 
-		So, instead of doing this, I just modify the headers of the HTTP request to ask for uncmopressed
-		data.
-		'''
-		found = False
-
-		for line in headers:
-			if "Accept-Encoding" in line:
-				line = "Accept-Encoding: "
-				found = True
-				break
-
-		# Reconstruct the request with the modified Accept-Encoding header
-		data = method + "\r\n"
-		
-		if not found:
-			data += "Accept-Encoding: \r\n"
-		
-		for line in headers:
-			data += line + "\r\n"
-
-		data += "\r\n"
-		data += payload
-
 		# If the hostname the user is trying to reach is banned, we simply return the "site banned"
 		# html to the user's browser 
+		
+		# Looking up via hostname instead of IP address now
+		#host_ip = socket.gethostbyname(hostname)	
+		#if host_ip in self.banned_hosts:
+		
 		if hostname in self.banned_hosts:
 			print "[IP", addr[0], "trying to access banned host", hostname, "- blocked]"
 			conn.send(self.banned_html + "\r\n")
@@ -167,31 +142,30 @@ class Proxy:
 		for x in tmp:
 			response_payload += x
 
-		''' #Removed because the request header is changed to not allow gzip
+		# Headers are lines 1 to n-2
 		response_headers = response.split("\r\n")[1:][:-2]
 	
 		gzipped = False
 
 		# Check the response to see whether the payload is gzipped
 		for line in response_headers:
-			if "Content Encoding" in response and "gzip" in response:
-				gzipped = True
+			if "Content-Encoding:" in line:
+				if "gzip" in line:
+					gzipped = True
 
 		# Gunzip it if we need to
 		if gzipped:
-			response_payload = gzip.GzipFile(fileobj=StringIO(response_payload)).read()
-		'''
+			response_payload = zlib.decompress(response_payload, 16 + zlib.MAX_WBITS)
 
 		# And search for bad keywords
 		for keyword in self.bad_keywords:
 			if keyword in response_payload:
-				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]"
+				print "[IP", addr[0], " accessing page with banned keyword [", keyword, "]]"
 
-		conn.send(response)
-		conn.send("\r\n")
+		conn.send(response + "\r\n")
 		conn.close()
 
-		self.cache.add(url, response_payload)
+		self.cache.add(url, response)
 		return		
 
 	def parse_http(self, data):
@@ -274,7 +248,7 @@ class Proxy:
 		conn.send('''<html xmlns="http://www.w3.org/1999/xhtml">''')
 		conn.send('''<head><title>Admin Panel</title></head>''')
 		conn.send('''<body><h1>Admin Panel</h1><h2>Add Bans</h2>''')
-		conn.send('''<form action="add_host" method="post">''')
+		conn.send('''<form name="input" action="add_host" method="post">''')
 		conn.send('''<p>Host: <input type="text" name="host"/></p></form>''')
 		conn.send('''<form action="add_keyword" method="post"><p>Keyword: <input type="text" name="keyword"/></p></form>''')
 		conn.send('''<h2>Remove Bans</h2>''')
@@ -289,9 +263,12 @@ class Proxy:
 		The next 4 sections are similar to above, except for POSTing data from the forms, ie, data being added/removed from the
 		lists of keywords and hosts
 		'''
-		if "POST /add_host" in method:
+
+		if re.match("POST .*/add_host HTTP/1.[01]", method):
 			tmp = payload.split("host=")[1]
-			print "Adding site to banned hosts - ", tmp
+			# No longer banning by IP, so we just add the hostname to the ban list
+			# tmp = socket.gethostbyname(tmp)
+			print "[Adding site to banned hosts - ", tmp + "]"
 			if tmp in self.banned_hosts:
 				html += " <p>Host '" + tmp + "' already present in ban list</p>"
 			else:
@@ -301,22 +278,22 @@ class Proxy:
 		conn.send(html)
 		html = ""
 
-		if "POST /del_host" in method:
+		if re.match("POST .*/del_host HTTP/1.[01]", method):
 			tmp = payload.split("host=")[1]
 			if tmp in self.banned_hosts:
-				print "Removed site from banned hosts -", tmp
+				print "[Removed site from banned hosts -", tmp + "]"
 				html += " <p>Removed banned host " + tmp + "</p>"
 				self.banned_hosts.remove(tmp)
 			else:
-				print "Tried to remove site from banned hosts, not present in ban list -", tmp
+				print "[Tried to remove site from banned hosts, not present in ban list -", tmp + "]"
 				html += "<p> Banned hosts list did not previously contain host '" + tmp + "'</p>"
 
 		conn.send(html)
 		html = ""		
 
-		if "POST /add_keyword" in method:
+		if re.match("POST .*/add_keyword HTTP/1.[01]", method):
 			tmp = payload.split("keyword=")[1]
-			print "Adding word to banned keywords list - ", tmp
+			print "[Adding word to banned keywords list - ", tmp + "]"
 			if tmp in self.bad_keywords:
 				html += " <p>Keyword '" + tmp + "' already present in bad word list</p>"
 			else:
@@ -326,14 +303,14 @@ class Proxy:
 		conn.send(html)
 		html = ""
 
-		if "POST /del_keyword" in method:
+		if re.match("POST .*/del_keyword HTTP/1.[01]", method):
 			tmp = payload.split("keyword=")[1]
 			if tmp in self.bad_keywords:
-				print "Removed site from bad keywords -", tmp
+				print "[Removed site from bad keywords -", tmp + "]"
 				html += "<p> Removed bad keyword '" + tmp + "'</p>"
 				self.bad_keywords.remove(tmp)
 			else:
-				print "Tried to remove keyword from ban list but was not present -", tmp
+				print "[Tried to remove keyword from ban list but was not present -", tmp + "]"
 				html += "<p> Ban list did not previously contain keyword '" + tmp + "'</p>"
 
 		conn.send(html)
@@ -366,12 +343,12 @@ class Proxy:
 		
 		html = ""
 
+		pages = self.cache.get_all()
 		if len(pages.keys()) == 0:
 			html += "<li>(None)</li>"
 
-		pages = self.cache.get_all()
 		for url in pages.keys():
-			html += "<li> <a href=\"/get_cache?url=" + url + "\">" + url + "</a></li>"
+			html += "<li> <a href=" + url + ">" + url + "</a></li>"
 
 		conn.send(html)
 		conn.send("</ul> </body> </html>" + "\r\n")
