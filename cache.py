@@ -33,7 +33,7 @@ class Cache:
 				# Remove oldest item from queue
 				tmp = self.urls.popleft()
 				# Remove this item from cache
-				del self.urls[tmp]
+				del self.contents[tmp]
 				print "[Removed URL", tmp, "from cache]"
 			# Add item to cache
 			self.urls.append(url)

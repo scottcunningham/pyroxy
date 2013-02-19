@@ -31,7 +31,7 @@ class Proxy:
 		self.banned_html = open("resources/banned.html").read()
 		self.connect_error_html = open("resources/connect.html").read()
 	
-		print "== Starting up. Good luck."
+		print "Starting up. Good luck."
 
 		self.cache.add("hello.de", "<html><h1>Test cache page</h1></html>")
 
@@ -175,7 +175,10 @@ class Proxy:
 
 		# Gunzip it if we need to
 		if gzipped:
-			response_payload = zlib.decompress(response_payload, 16 + zlib.MAX_WBITS)
+			try:
+				response_payload = zlib.decompress(response_payload, 16 + zlib.MAX_WBITS)
+			except:
+				pass
 
 		# And search for bad keywords
 		for keyword in self.bad_keywords:
@@ -350,7 +353,7 @@ class Proxy:
 			html += "<li>(None)</li>"
 
 		for url in pages.keys():
-			html += "<li> <a href=" + url + ">" + url + "</a></li>"
+			html += "<li> <a href=/get_cache?url=" + url + ">" + url + "</a></li>"
 
 		conn.send(html)
 		conn.send("</ul> </body> </html>" + "\r\n")
