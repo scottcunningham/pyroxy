@@ -2,6 +2,7 @@ import socket
 import zlib
 import cache
 import re
+import time
 from thread import *
 
 class Proxy:
@@ -33,7 +34,7 @@ class Proxy:
 	
 		print "Starting up. Good luck."
 
-		self.cache.add("hello.de", "<html><h1>Test cache page</h1></html>")
+		self.cache.add("http://hello.de", "<html><h1>Test cache page</h1></html>")
 
 		self.loop_forever()
 
@@ -149,7 +150,7 @@ class Proxy:
 
 		conn.send(response + "\r\n")
 		conn.close()
-
+	
 		self.cache.add(url, response)
 		return		
 
@@ -246,6 +247,10 @@ class Proxy:
 	- View locally cached pages
 	'''
 	def handle_admin(self, method, conn, payload, headers):
+
+		# Generic HTTP header with only the Date header filled in
+		conn.send("HTTP/1.1 200 OK\r\n")
+		conn.send("Date:" + time.asctime(time.localtime()) + "\r\n\r\n")
 
 		# This is the HTML of the admin page
 		# There is a lot of it, but it just marks up to forms for adding/removing hosts/keywords, and lists of hosts/keywords/cached pages
@@ -353,7 +358,7 @@ class Proxy:
 			html += "<li>(None)</li>"
 
 		for url in pages.keys():
-			html += "<li> <a href=/get_cache?url=" + url + ">" + url + "</a></li>"
+			html += "<li> <a href=\"" + url + "\">" + url + "</a></li>"
 
 		conn.send(html)
 		conn.send("</ul> </body> </html>" + "\r\n")
